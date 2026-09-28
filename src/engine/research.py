@@ -9,13 +9,14 @@ import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Iterator, Literal
 
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from engine import db
-from engine.config import get_settings
+from engine.config import NICHES_FILE, get_settings
 
 # Coste en unidades de cuota por llamada (YouTube Data API v3).
 YT_COSTS = {"search.list": 100, "videos.list": 1, "channels.list": 1, "playlistItems.list": 1}
@@ -81,6 +82,25 @@ class ResearchSummary:
     channels_skipped: int
     outliers_saved: int
     units_used: int
+
+
+@dataclass
+class Niche:
+    query: str
+    lang: str | None = None
+
+
+def load_niches(path: Path = NICHES_FILE) -> list[Niche]:
+    """Lee `niches.txt`: una consulta por línea, `consulta | idioma` (idioma opcional)."""
+    niches = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        query, _, lang = (part.strip() for part in line.partition("|"))
+        if query:
+            niches.append(Niche(query, lang or None))
+    return list({n.query: n for n in niches}.values())  # sin duplicados, conserva el orden
 
 
 _DURATION_RE = re.compile(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$")

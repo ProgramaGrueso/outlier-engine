@@ -80,9 +80,20 @@ Busca Shorts recientes de un nicho y guarda los que rinden muy por encima de su 
 `score = ratio × log10(vistas)` para premiar alcance real y no solo ratio.
 
 ```bash
-uv run engine research "frutas con inteligencia artificial" --days 30 --lang es
+uv run engine research                     # todas las consultas de niches.txt
+uv run engine research "frutinovelas" --lang es   # una sola consulta
 uv run engine top --limit 20
 ```
+
+### Consultas (`niches.txt`)
+Una consulta por línea con formato `consulta | idioma` (idioma opcional, se pasa como
+`relevanceLanguage`); las líneas con `#` se ignoran. El texto de la consulta es la
+etiqueta del nicho en la base (`engine top --niche "stoicism"`). `--lang` en la línea de
+comandos pisa el idioma del archivo y `--file` permite usar otra lista.
+
+Al recorrer todas, se muestra antes el coste estimado de búsqueda. Si la cuota se agota a
+mitad de camino, se detiene y lista las consultas pendientes; lo ya guardado se conserva
+y los canales consultados quedan en caché.
 
 Opciones de `research`:
 
@@ -125,9 +136,11 @@ Los filtros de vistas y ratio se aplican al leer (`engine top` y la entrada de l
    Cada corrida queda en `research_runs`.
 
 ### Cuota
-Una corrida con `--pages 2` y ~60 canales nuevos cuesta ≈ 290 unidades (200 de búsqueda +
+Cada consulta con `--pages 2` y ~60 canales nuevos cuesta ≈ 290 unidades (200 de búsqueda +
 ~1,5 por canal). Si la próxima llamada superaría `YT_DAILY_QUOTA`, se aborta antes de hacerla.
 Consultar el gasto del día: `engine doctor`.
+Recorrer las 21 consultas de `niches.txt` cuesta ≈ 6 000 unidades con `--pages 2` y
+≈ 3 000 con `--pages 1` (menos cuando los canales ya están en caché).
 
 ## Tests
 ```bash

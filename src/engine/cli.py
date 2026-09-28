@@ -1,5 +1,6 @@
 """CLI `engine`."""
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -9,6 +10,7 @@ from rich.table import Table
 from engine import db
 from engine import doctor as doctor_mod
 from engine import research as research_mod
+from engine.config import NICHES_FILE, get_settings
 
 app = typer.Typer(help="Outlier Engine: formatos virales → guiones → ComfyUI.", no_args_is_help=True)
 console = Console()
@@ -46,30 +48,52 @@ def doctor() -> None:
 
 @app.command()
 def research(
-    niche: str = typer.Argument(..., help='Búsqueda del nicho, ej. "frutas ia"'),
+    niche: Optional[str] = typer.Argument(None, help='Consulta, ej. "frutinovelas". Sin argumento: todas las de niches.txt'),
     days: int = typer.Option(30, help="Solo Shorts publicados en los últimos N días"),
-    pages: int = typer.Option(2, help="Páginas de search.list (50 resultados, 100 unidades c/u)"),
+    pages: int = typer.Option(2, help="Páginas de search.list por consulta (50 resultados, 100 unidades c/u)"),
     order: str = typer.Option("viewCount", help="viewCount | relevance | date"),
-    lang: Optional[str] = typer.Option(None, help="relevanceLanguage, ej. es"),
+    lang: Optional[str] = typer.Option(None, help="relevanceLanguage, ej. es (pisa el de niches.txt)"),
     region: Optional[str] = typer.Option(None, help="regionCode, ej. MX"),
     min_ratio: Optional[float] = typer.Option(None, help="Umbral de outlier (por defecto OUTLIER_RATIO_MIN)"),
+    file: Path = typer.Option(NICHES_FILE, "--file", help="Archivo de consultas"),
 ) -> None:
-    """Busca Shorts recientes del nicho y guarda los outliers."""
+    """Busca Shorts recientes de uno o todos los nichos y guarda los outliers."""
     if order not in ("viewCount", "relevance", "date"):
         raise typer.BadParameter("order debe ser viewCount, relevance o date")
-    try:
-        s = research_mod.research(
-            niche, days=days, pages=pages, order=order, lang=lang, region=region, min_ratio=min_ratio
-        )
-    except research_mod.QuotaExceededError as e:
-        console.print(f"[red]Cuota agotada:[/red] {e}")
+    niches = [research_mod.Niche(niche, lang)] if niche else research_mod.load_niches(file)
+    if not niches:
+        console.print(f"[red]No hay consultas en {file}[/red]")
         raise typer.Exit(code=1)
-    console.print(
-        f"[bold]{s.niche}[/bold]: {s.videos_scanned} videos · {s.shorts} Shorts · "
-        f"canales {s.channels_fetched} nuevos / {s.channels_cached} en caché / {s.channels_skipped} sin mediana\n"
-        f"[green]{s.outliers_saved} outliers guardados[/green] · {s.units_used} unidades de cuota "
-        f"(hoy: {db.api_units_today(db.get_conn())})"
-    )
+
+    conn = db.get_conn()
+    if len(niches) > 1:
+        remaining = get_settings().yt_daily_quota - db.api_units_today(conn)
+        search_cost = len(niches) * pages * research_mod.YT_COSTS["search.list"]
+        console.print(
+            f"{len(niches)} consultas · búsqueda ≈ {search_cost} unidades + ~1,5 por canal nuevo "
+            f"· quedan {remaining} hoy"
+        )
+
+    total_saved = 0
+    for i, n in enumerate(niches):
+        try:
+            s = research_mod.research(
+                n.query, days=days, pages=pages, order=order, lang=lang or n.lang,
+                region=region, min_ratio=min_ratio, conn=conn,
+            )
+        except research_mod.QuotaExceededError as e:
+            console.print(f"[red]Cuota agotada:[/red] {e}")
+            pending = [p.query for p in niches[i:]]
+            if len(niches) > 1:
+                console.print("Pendientes: " + ", ".join(pending))
+            raise typer.Exit(code=1)
+        total_saved += s.outliers_saved
+        console.print(
+            f"[bold]{s.niche}[/bold]: {s.videos_scanned} videos · {s.shorts} Shorts · "
+            f"canales {s.channels_fetched} nuevos / {s.channels_cached} en caché / {s.channels_skipped} sin mediana · "
+            f"[green]{s.outliers_saved} outliers[/green] · {s.units_used} unidades"
+        )
+    console.print(f"Total: [green]{total_saved} outliers guardados[/green] · cuota hoy: {db.api_units_today(conn)}")
 
 
 @app.command()

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT / ".env"
 PROMPTS_DIR = ROOT / "prompts"
 WORKFLOWS_DIR = ROOT / "workflows"
+NICHES_FILE = ROOT / "niches.txt"
 
 # Roles de modelo cheap: cada uno puede usar un modelo de Ollama distinto.
 ModelRole = Literal["classify", "write", "critic", "scenes"]

@@ -318,3 +318,56 @@ def test_cli_top_sort_option():
     out = runner.invoke(app, ["top", "--min-views", "0", "--sort", "ratio"], env=env).output
     assert out.index("shorts/tiny") < out.index("shorts/big")
     assert runner.invoke(app, ["top", "--sort", "foo"]).exit_code != 0
+
+
+# --- niches.txt ---
+
+def test_load_niches(tmp_path):
+    f = tmp_path / "n.txt"
+    f.write_text("# comentario\n\nfrutinovelas | es\nai news|en\nsin idioma\nfrutinovelas | es\n  \n")
+    assert research.load_niches(f) == [
+        research.Niche("frutinovelas", "es"), research.Niche("ai news", "en"), research.Niche("sin idioma", None),
+    ]
+
+
+def test_repo_niches_file_parses():
+    niches = research.load_niches()
+    assert len(niches) >= 20 and all(n.lang in ("es", "en") for n in niches)
+
+
+def _fake_research(calls, fail_on=None):
+    def fake(query, **kw):
+        if query == fail_on:
+            raise research.QuotaExceededError("sin cuota")
+        calls.append((query, kw["lang"]))
+        return research.ResearchSummary(query, 10, 9, 2, 1, 0, 1, 102)
+    return fake
+
+
+def test_cli_research_all_niches(monkeypatch, tmp_path):
+    f = tmp_path / "n.txt"
+    f.write_text("frutinovelas | es\nai news | en\n")
+    calls = []
+    monkeypatch.setattr(research, "research", _fake_research(calls))
+    result = CliRunner().invoke(app, ["research", "--file", str(f)], env={"COLUMNS": "250"})
+    assert result.exit_code == 0, result.output
+    assert calls == [("frutinovelas", "es"), ("ai news", "en")]
+    assert "2 consultas" in result.output and "Total: 2 outliers" in result.output
+
+
+def test_cli_research_single_niche_ignores_file(monkeypatch):
+    calls = []
+    monkeypatch.setattr(research, "research", _fake_research(calls))
+    result = CliRunner().invoke(app, ["research", "stoicism", "--lang", "en"])
+    assert result.exit_code == 0 and calls == [("stoicism", "en")]
+
+
+def test_cli_research_reports_pending_on_quota(monkeypatch, tmp_path):
+    f = tmp_path / "n.txt"
+    f.write_text("a | es\nb | es\nc | en\n")
+    calls = []
+    monkeypatch.setattr(research, "research", _fake_research(calls, fail_on="b"))
+    result = CliRunner().invoke(app, ["research", "--file", str(f)], env={"COLUMNS": "250"})
+    assert result.exit_code == 1
+    assert calls == [("a", "es")]
+    assert "Pendientes: b, c" in result.output

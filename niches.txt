@@ -1,0 +1,34 @@
+# Consultas de `engine research` (sin argumento recorre todas).
+# Formato: consulta | idioma (relevanceLanguage, opcional). Líneas con # se ignoran.
+# El texto de la consulta es la etiqueta del nicho: `engine top --niche "<consulta>"`.
+
+# Frutinovelas / IA
+frutas con inteligencia artificial | es
+frutinovelas | es
+ai fruit story | en
+
+# Inteligencia artificial
+inteligencia artificial | es
+artificial intelligence explained | en
+noticias de inteligencia artificial | es
+ai news | en
+
+# Filosofía
+estoicismo | es
+stoicism | en
+objetivismo ayn rand | es
+objectivism ayn rand | en
+materialismo dialéctico | es
+dialectical materialism | en
+
+# Economía y política
+capitalismo explicado | es
+capitalism explained | en
+tecnofascismo | es
+technofascism | en
+tecnofeudalismo | es
+
+# Crimen y misterio
+casos criminales | es
+true crime shorts | en
+casos reales de misterio | es
