@@ -16,7 +16,8 @@ WORKFLOWS_DIR = ROOT / "workflows"
 ModelRole = Literal["classify", "write", "critic", "scenes"]
 MODEL_ROLES: tuple[ModelRole, ...] = ("classify", "write", "critic", "scenes")
 
-REQUIRED_KEYS = ("youtube_api_key", "anthropic_api_key")
+# ANTHROPIC_API_KEY es opcional: solo se exige al llamar al tier premium.
+REQUIRED_KEYS = ("youtube_api_key",)
 
 
 class Settings(BaseSettings):

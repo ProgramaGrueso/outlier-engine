@@ -68,6 +68,20 @@ def test_premium_logs_tokens(monkeypatch):
     assert (row["tier"], row["model"], row["tokens_in"], row["tokens_out"]) == ("premium", "claude-sonnet-5", 300, 80)
 
 
+def test_premium_without_key_fails_cheap_still_works(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    llm.get_settings.cache_clear()
+    with pytest.raises(llm.MissingAPIKeyError):
+        llm.complete("x", task="juez", tier="premium")
+    assert _rows() == []
+
+    monkeypatch.setattr(
+        llm.httpx, "post",
+        lambda url, json, timeout: FakeResponse({"message": {"content": "ok"}, "prompt_eval_count": 1, "eval_count": 1}),
+    )
+    assert llm.complete("x", task="analyze").text == "ok"
+
+
 def test_failed_call_is_logged(monkeypatch):
     def boom(*a, **kw):
         raise httpx.ConnectError("down")

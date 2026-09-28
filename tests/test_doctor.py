@@ -22,10 +22,26 @@ def test_env_missing_keys(monkeypatch, tmp_path):
     env = tmp_path / ".env"
     env.write_text("")
     monkeypatch.setattr(doctor, "ENV_FILE", env)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("YOUTUBE_API_KEY", "")
     doctor.get_settings.cache_clear()
     c = doctor.check_env()
-    assert not c.ok and "ANTHROPIC_API_KEY" in c.detail
+    assert not c.ok and "YOUTUBE_API_KEY" in c.detail
+
+
+def test_env_ok_without_anthropic_key(monkeypatch, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text("")
+    monkeypatch.setattr(doctor, "ENV_FILE", env)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    doctor.get_settings.cache_clear()
+    assert doctor.check_env().ok
+
+
+def test_anthropic_missing_key_is_warning(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    doctor.get_settings.cache_clear()
+    c = doctor.check_anthropic()
+    assert c.ok and c.warn
 
 
 def test_env_file_absent(monkeypatch, tmp_path):
@@ -88,5 +104,8 @@ def test_cli_exit_code(monkeypatch):
     runner = CliRunner()
     monkeypatch.setattr(doctor, "ALL_CHECKS", [lambda: doctor.Check("a", True, "")])
     assert runner.invoke(app, ["doctor"]).exit_code == 0
+    monkeypatch.setattr(doctor, "ALL_CHECKS", [lambda: doctor.Check("a", True, "", warn=True)])
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0 and "⚠️" in result.output
     monkeypatch.setattr(doctor, "ALL_CHECKS", [lambda: doctor.Check("a", False, "")])
     assert runner.invoke(app, ["doctor"]).exit_code == 1

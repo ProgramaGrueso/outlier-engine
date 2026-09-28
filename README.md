@@ -21,25 +21,27 @@ diseño completo por fases.
 - [`uv`](https://docs.astral.sh/uv/) (instala Python 3.12 si hace falta)
 - Ollama corriendo (`ollama serve`) con el modelo por defecto: `ollama pull qwen2.5:7b`
 - GPU NVIDIA con `nvidia-smi`
-- API key de YouTube Data API v3 y API key de Anthropic
+- API key de YouTube Data API v3
+- API key de Anthropic (opcional: solo la usa el tier premium, juez de la Fase 3)
 
 ### Instalación
 ```bash
 uv sync
-cp .env.example .env    # y completar YOUTUBE_API_KEY y ANTHROPIC_API_KEY
+cp .env.example .env    # completar YOUTUBE_API_KEY (y ANTHROPIC_API_KEY si vas a usar premium)
 uv run engine doctor
 ```
 
-`engine doctor` debe salir todo en ✅ (código de salida 0). Verifica:
+`engine doctor` no debe mostrar ❌ (código de salida 0). ⚠️ es una advertencia que no bloquea.
+Verifica:
 
 | Chequeo | Qué hace |
 |---|---|
-| `.env` | existe y tiene las claves obligatorias |
+| `.env` | existe y tiene `YOUTUBE_API_KEY` |
 | SQLite | crea/migra `data/outliers.db` al último schema |
 | Ollama | responde y tiene descargados todos los modelos configurados |
 | GPU | `nvidia-smi` reporta la GPU |
 | YouTube API | valida la key con `videos.list` (1 unidad) y muestra la cuota del día |
-| Anthropic | valida key y modelo premium con `models.retrieve` (sin coste) |
+| Anthropic | valida key y modelo premium con `models.retrieve` (sin coste). Sin key: ⚠️; `llm.complete(tier="premium")` lanzará `MissingAPIKeyError` |
 
 ### Modelos por rol
 El nivel `cheap` (Ollama) elige el modelo según el rol de la tarea. Cada rol tiene su

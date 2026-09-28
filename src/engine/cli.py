@@ -24,7 +24,8 @@ def doctor() -> None:
     table.add_column("Chequeo")
     table.add_column("Detalle")
     for c in checks:
-        table.add_row("✅" if c.ok else "❌", c.name, c.detail)
+        icon = "❌" if not c.ok else "⚠️" if c.warn else "✅"
+        table.add_row(icon, c.name, c.detail)
     console.print(table)
     if not all(c.ok for c in checks):
         raise typer.Exit(code=1)

@@ -22,6 +22,10 @@ Tier = Literal["cheap", "premium"]
 OLLAMA_TIMEOUT = httpx.Timeout(10.0, read=600.0)
 
 
+class MissingAPIKeyError(RuntimeError):
+    pass
+
+
 @dataclass
 class LLMResult:
     text: str
@@ -51,6 +55,8 @@ def complete(
     `json_mode` fuerza salida JSON en Ollama; la validación pydantic la hace quien llama.
     """
     settings = get_settings()
+    if tier == "premium" and not settings.anthropic_api_key.strip():
+        raise MissingAPIKeyError("ANTHROPIC_API_KEY vacía en .env: el tier premium no está disponible")
     model = settings.ollama_model_for(role) if tier == "cheap" else settings.anthropic_model
     own_conn = conn is None
     conn = conn or db.get_conn()

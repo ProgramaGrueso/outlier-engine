@@ -20,6 +20,7 @@ class Check:
     name: str
     ok: bool
     detail: str
+    warn: bool = False  # no bloquea: doctor sigue en verde
 
 
 def check_env() -> Check:
@@ -96,7 +97,7 @@ def check_youtube() -> Check:
 def check_anthropic() -> Check:
     settings = get_settings()
     if not settings.anthropic_api_key:
-        return Check("Anthropic", False, "ANTHROPIC_API_KEY vacía")
+        return Check("Anthropic", True, "ANTHROPIC_API_KEY vacía · el tier premium fallará", warn=True)
     try:
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         client.models.retrieve(settings.anthropic_model)  # valida key y modelo, sin tokens
