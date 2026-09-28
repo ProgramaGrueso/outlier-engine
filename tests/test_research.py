@@ -19,6 +19,7 @@ class FakeYouTubeAPI:
         self.videos_db = {}
         self.uploads = {}
         self.missing_playlists = set(missing_playlists)
+        self.meta = {}  # video_id → {"defaultAudioLanguage": ..., "categoryId": ...}
         for cid, views in channels.items():
             ids = [f"{cid}-u{i}" for i in range(len(views))]
             self.uploads[f"UU{cid}"] = ids
@@ -56,7 +57,8 @@ class FakeYouTubeAPI:
                 "id": vid,
                 "snippet": {"channelId": cid, "channelTitle": f"Canal {cid}", "title": f"T {vid}",
                             "description": "", "publishedAt": "2026-09-20T00:00:00Z",
-                            "liveBroadcastContent": "none"},
+                            "liveBroadcastContent": "none",
+                            **self.meta.get(vid, {"defaultAudioLanguage": "es", "categoryId": "22"})},
                 "statistics": {"viewCount": str(views), "likeCount": "10"},
                 "contentDetails": {"duration": dur},
             })
@@ -275,21 +277,21 @@ def test_migration_3_invalidates_old_channel_cache(tmp_path):
     with conn:
         conn.execute("INSERT INTO channels (channel_id, median_views, sample_size, fetched_at) "
                      "VALUES ('A', 1000, 30, ?)", (db.now_iso(),))
-    assert db.migrate(conn) == [3]
+    assert db.migrate(conn) == [3, 4]
     row = conn.execute("SELECT median_source, fetched_at FROM channels").fetchone()
     assert row["median_source"] is None and row["fetched_at"].startswith("1970")
 
 
 # --- score = ratio × log10(vistas) ---
 
-def _insert_outlier(conn, vid, views, ratio):
+def _insert_outlier(conn, vid, views, ratio, *, channel="Z", language=None, category_id=None):
     with conn:
         conn.execute("INSERT OR IGNORE INTO channels (channel_id, median_views, sample_size, fetched_at) "
-                     "VALUES ('Z', 1, 5, ?)",
-                     (db.now_iso(),))
+                     "VALUES (?, 1, 5, ?)",
+                     (channel, db.now_iso()))
     research.save_outlier(
         conn,
-        research.Video(vid, "Z", "", vid, "", "", 30, views, None, None),
+        research.Video(vid, channel, "", vid, "", "", 30, views, None, None, language, category_id),
         "n", views / ratio, ratio,
     )
 
@@ -332,7 +334,7 @@ def test_load_niches(tmp_path):
 
 def test_repo_niches_file_parses():
     niches = research.load_niches()
-    assert len(niches) >= 20 and all(n.lang in ("es", "en") for n in niches)
+    assert len(niches) >= 10 and all(n.lang == "es" for n in niches)
 
 
 def _fake_research(calls, fail_on=None):
@@ -340,7 +342,7 @@ def _fake_research(calls, fail_on=None):
         if query == fail_on:
             raise research.QuotaExceededError("sin cuota")
         calls.append((query, kw["lang"]))
-        return research.ResearchSummary(query, 10, 9, 2, 1, 0, 1, 102)
+        return research.ResearchSummary(query, 10, 9, 0, 2, 1, 0, 1, 102)
     return fake
 
 
@@ -371,3 +373,78 @@ def test_cli_research_reports_pending_on_quota(monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert calls == [("a", "es")]
     assert "Pendientes: b, c" in result.output
+
+
+# --- Filtros de idioma y categoría (noticias) ---
+
+def test_video_language_normalizes():
+    assert research.video_language({"defaultAudioLanguage": "es-419"}) == "es"
+    assert research.video_language({"defaultLanguage": "EN"}) == "en"
+    assert research.video_language({}) is None
+
+
+def test_research_skips_other_languages_and_news_before_fetching_channels():
+    api = _fixture_api()
+    api.meta["s1"] = {"defaultAudioLanguage": "te", "categoryId": "22"}  # telugu → fuera
+    api.meta["s3"] = {"defaultAudioLanguage": "es", "categoryId": "25"}  # noticias → fuera
+    conn, s = _run(api)
+    assert (s.shorts, s.filtered, s.outliers_saved) == (4, 2, 0)
+    # B solo aparecía por s3 (noticias) y s4 (no es Short): no se consulta. A sigue por s2.
+    ids_consultados = [kw["id"] for e, kw in api.calls if e == "channels.list"]
+    assert ids_consultados == ["A,C"]
+
+
+def test_video_without_declared_language_passes():
+    api = _fixture_api()
+    api.meta["s1"] = {"categoryId": "22"}
+    _, s = _run(api)
+    assert s.filtered == 0 and s.outliers_saved == 2
+
+
+def test_filters_configurable(monkeypatch):
+    monkeypatch.setenv("RESULT_LANGUAGES", "es,en")
+    monkeypatch.setenv("EXCLUDE_CATEGORY_IDS", "")
+    research.get_settings.cache_clear()
+    api = _fixture_api()
+    api.meta["s1"] = {"defaultAudioLanguage": "en", "categoryId": "25"}
+    _, s = _run(api)
+    assert s.filtered == 0 and s.outliers_saved == 2
+
+
+def test_eligible_filters_stored_rows_by_language_and_category(monkeypatch):
+    conn = db.get_conn()
+    _insert_outlier(conn, "es_ok", 50_000, 10.0, language="es", category_id="22")
+    _insert_outlier(conn, "en", 50_000, 10.0, language="en", category_id="22")
+    _insert_outlier(conn, "news", 50_000, 10.0, language="es", category_id="25")
+    _insert_outlier(conn, "unknown", 50_000, 10.0)
+    got = {r["video_id"] for r in research.eligible_outliers(conn)}
+    assert got == {"es_ok", "unknown"}
+
+    monkeypatch.setenv("RESULT_LANGUAGES", "")
+    monkeypatch.setenv("EXCLUDE_CATEGORY_IDS", "")
+    research.get_settings.cache_clear()
+    assert len(research.eligible_outliers(conn)) == 4
+
+
+# --- Máximo de videos por canal en top ---
+
+def test_max_per_channel_keeps_best_of_each_channel():
+    conn = db.get_conn()
+    for i, views in enumerate([10_000, 20_000, 30_000, 40_000]):
+        _insert_outlier(conn, f"z{i}", views, 10.0)  # canal Z
+    _insert_outlier(conn, "y0", 15_000, 10.0, channel="Y")
+    rows = research.eligible_outliers(conn, max_per_channel=2)
+    assert [r["video_id"] for r in rows] == ["z3", "z2", "y0"]
+    assert len(research.eligible_outliers(conn)) == 5  # sin límite por defecto (entrada de la Fase 2)
+
+
+def test_cli_top_per_channel(monkeypatch):
+    conn = db.get_conn()
+    for i in range(4):
+        _insert_outlier(conn, f"z{i}", 10_000 * (i + 1), 10.0)
+    runner = CliRunner()
+    env = {"COLUMNS": "250"}
+    out = runner.invoke(app, ["top"], env=env).output  # TOP_MAX_PER_CHANNEL=2 por defecto
+    assert "shorts/z3" in out and "shorts/z2" in out and "shorts/z1" not in out
+    out = runner.invoke(app, ["top", "--per-channel", "0"], env=env).output
+    assert "shorts/z0" in out

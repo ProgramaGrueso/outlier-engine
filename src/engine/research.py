@@ -70,6 +70,23 @@ class Video:
     views: int
     likes: int | None
     comments: int | None
+    language: str | None = None  # ISO de 2 letras
+    category_id: str | None = None
+
+
+def video_language(snippet: dict) -> str | None:
+    """Idioma declarado del video: audio primero, luego el de título/descripción."""
+    lang = snippet.get("defaultAudioLanguage") or snippet.get("defaultLanguage")
+    return lang.lower()[:2] if lang else None
+
+
+def passes_content_filters(v: Video) -> bool:
+    """RESULT_LANGUAGES y EXCLUDE_CATEGORY_IDS. Sin idioma declarado se deja pasar."""
+    settings = get_settings()
+    langs = settings.languages()
+    if langs and v.language and v.language not in langs:
+        return False
+    return v.category_id not in settings.excluded_categories()
 
 
 @dataclass
@@ -77,6 +94,7 @@ class ResearchSummary:
     niche: str
     videos_scanned: int
     shorts: int
+    filtered: int  # Shorts descartados por idioma o categoría
     channels_fetched: int
     channels_cached: int
     channels_skipped: int
@@ -178,6 +196,8 @@ def fetch_videos(yt: YouTube, ids: list[str]) -> list[Video]:
                     views=int(st["viewCount"]),
                     likes=_int(st.get("likeCount")),
                     comments=_int(st.get("commentCount")),
+                    language=video_language(sn),
+                    category_id=sn.get("categoryId"),
                 )
             )
     return videos
@@ -320,15 +340,18 @@ def save_outlier(conn: sqlite3.Connection, v: Video, niche: str, median: float, 
         conn.execute(
             """INSERT INTO outliers
                (video_id, channel_id, niche, title, description, published_at, duration_s,
-                views, likes, comments, channel_median, outlier_ratio, first_seen, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                views, likes, comments, channel_median, outlier_ratio, language, category_id,
+                first_seen, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT (video_id) DO UPDATE SET
                  views = excluded.views, likes = excluded.likes, comments = excluded.comments,
                  channel_median = excluded.channel_median, outlier_ratio = excluded.outlier_ratio,
+                 language = excluded.language, category_id = excluded.category_id,
                  updated_at = excluded.updated_at""",
             (
                 v.video_id, v.channel_id, niche, v.title, v.description, v.published_at,
-                v.duration_s, v.views, v.likes, v.comments, median, ratio, now, now,
+                v.duration_s, v.views, v.likes, v.comments, median, ratio, v.language,
+                v.category_id, now, now,
             ),
         )
 
@@ -352,7 +375,9 @@ def research(
 
     ids = search_video_ids(yt, niche, days, pages, order, lang, region)
     videos = fetch_videos(yt, ids)
-    shorts = [v for v in videos if 0 < v.duration_s <= settings.short_max_seconds]
+    all_shorts = [v for v in videos if 0 < v.duration_s <= settings.short_max_seconds]
+    # Filtrar antes de consultar canales: no gastar cuota en idiomas ajenos ni noticias.
+    shorts = [v for v in all_shorts if passes_content_filters(v)]
 
     channel_ids = list(dict.fromkeys(v.channel_id for v in shorts))
     medians = _fresh_channels(conn, channel_ids)
@@ -378,7 +403,8 @@ def research(
     summary = ResearchSummary(
         niche=niche,
         videos_scanned=len(videos),
-        shorts=len(shorts),
+        shorts=len(all_shorts),
+        filtered=len(all_shorts) - len(shorts),
         channels_fetched=len(to_fetch),
         channels_cached=cached,
         channels_skipped=sum(1 for c in channel_ids if not medians.get(c)),
@@ -412,25 +438,42 @@ def eligible_outliers(
     niche: str | None = None,
     min_views: int | None = None,
     min_ratio: float | None = None,
+    max_per_channel: int | None = None,
     sort: SortKey = "score",
 ) -> list[sqlite3.Row]:
-    """Outliers que pasan OUTLIER_MIN_VIEWS y OUTLIER_RATIO_MIN. Entrada de `engine top` y de la Fase 2.
+    """Outliers que pasan los filtros de `.env`. Entrada de `engine top` y de la Fase 2.
 
-    En la tabla se guardan todos los outliers; los umbrales se aplican aquí para poder
-    cambiarlos sin volver a consultar la API. El ratio se vuelve a filtrar porque un
-    outlier guardado puede dejar de serlo cuando se recalcula la mediana de su canal.
+    En la tabla se guardan todos los outliers; los umbrales (OUTLIER_MIN_VIEWS,
+    OUTLIER_RATIO_MIN) y los filtros de contenido (RESULT_LANGUAGES, EXCLUDE_CATEGORY_IDS)
+    se aplican aquí para poder cambiarlos sin volver a consultar la API. El ratio se
+    vuelve a filtrar porque un outlier puede dejar de serlo al recalcular su canal.
+    `max_per_channel` limita cuántos videos de un mismo canal aparecen (None = sin límite).
     """
     settings = get_settings()
     min_views = settings.outlier_min_views if min_views is None else min_views
     min_ratio = settings.outlier_ratio_min if min_ratio is None else min_ratio
-    sql = f"""SELECT o.*, c.title AS channel_title, c.median_source, {SCORE_SQL} AS score
-              FROM outliers o JOIN channels c USING (channel_id)
-              WHERE o.views >= ? AND o.outlier_ratio >= ? AND c.median_views IS NOT NULL"""
+    order = "score DESC" if sort == "score" else "outlier_ratio DESC"
+    rank_by = SCORE_SQL if sort == "score" else "o.outlier_ratio"
+    where = ["o.views >= ?", "o.outlier_ratio >= ?", "c.median_views IS NOT NULL"]
     params: list[Any] = [min_views, min_ratio]
+    if langs := sorted(settings.languages()):
+        where.append(f"(o.language IS NULL OR o.language IN ({','.join('?' * len(langs))}))")
+        params += langs
+    if cats := sorted(settings.excluded_categories()):
+        where.append(f"(o.category_id IS NULL OR o.category_id NOT IN ({','.join('?' * len(cats))}))")
+        params += cats
     if niche:
-        sql += " AND o.niche = ?"
+        where.append("o.niche = ?")
         params.append(niche)
-    sql += " ORDER BY score DESC" if sort == "score" else " ORDER BY o.outlier_ratio DESC"
+    sql = f"""SELECT * FROM (
+                SELECT o.*, c.title AS channel_title, c.median_source, {SCORE_SQL} AS score,
+                       ROW_NUMBER() OVER (PARTITION BY o.channel_id ORDER BY {rank_by} DESC) AS rank_in_channel
+                FROM outliers o JOIN channels c USING (channel_id)
+                WHERE {" AND ".join(where)})"""
+    if max_per_channel is not None:
+        sql += " WHERE rank_in_channel <= ?"
+        params.append(max_per_channel)
+    sql += f" ORDER BY {order}"
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)

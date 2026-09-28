@@ -46,6 +46,17 @@ class Settings(BaseSettings):
     channel_sample_size: int = 30  # últimos N uploads para la mediana
     channel_min_videos: int = 5  # con menos, la mediana no es fiable y se descarta el canal
     short_max_seconds: int = 180
+    # Idiomas aceptados (códigos ISO de 2 letras separados por coma; vacío = todos)
+    result_languages: str = "es"
+    # Categorías de YouTube excluidas (25 = News & Politics; vacío = ninguna)
+    exclude_category_ids: str = "25"
+    top_max_per_channel: int = 2
+
+    def languages(self) -> set[str]:
+        return {x.strip().lower()[:2] for x in self.result_languages.split(",") if x.strip()}
+
+    def excluded_categories(self) -> set[str]:
+        return {x.strip() for x in self.exclude_category_ids.split(",") if x.strip()}
 
     @field_validator("db_path")
     @classmethod

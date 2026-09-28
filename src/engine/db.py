@@ -92,6 +92,14 @@ MIGRATIONS: list[tuple[int, str]] = [
         UPDATE channels SET fetched_at = '1970-01-01T00:00:00+00:00';
         """,
     ),
+    (
+        4,
+        """
+        -- Idioma (ISO de 2 letras) y categoría de YouTube, para filtrar idioma y noticias.
+        ALTER TABLE outliers ADD COLUMN language TEXT;
+        ALTER TABLE outliers ADD COLUMN category_id TEXT;
+        """,
+    ),
 ]
 
 # La cuota de YouTube Data API se reinicia a medianoche hora del Pacífico.

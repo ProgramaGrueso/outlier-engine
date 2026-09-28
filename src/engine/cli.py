@@ -25,6 +25,11 @@ def _compact(n: float | None) -> str:
     return f"{n:.0f}"
 
 
+def _per_channel_limit(value: int | None) -> int | None:
+    value = get_settings().top_max_per_channel if value is None else value
+    return value or None  # 0 = sin límite
+
+
 @app.callback()
 def main() -> None:
     """Outlier Engine."""
@@ -89,7 +94,7 @@ def research(
             raise typer.Exit(code=1)
         total_saved += s.outliers_saved
         console.print(
-            f"[bold]{s.niche}[/bold]: {s.videos_scanned} videos · {s.shorts} Shorts · "
+            f"[bold]{s.niche}[/bold]: {s.videos_scanned} videos · {s.shorts} Shorts ({s.filtered} descartados por idioma/categoría) · "
             f"canales {s.channels_fetched} nuevos / {s.channels_cached} en caché / {s.channels_skipped} sin mediana · "
             f"[green]{s.outliers_saved} outliers[/green] · {s.units_used} unidades"
         )
@@ -103,12 +108,14 @@ def top(
     sort: str = typer.Option("score", help="score (ratio × log10 vistas) | ratio"),
     min_views: Optional[int] = typer.Option(None, help="Vistas mínimas (por defecto OUTLIER_MIN_VIEWS)"),
     min_ratio: Optional[float] = typer.Option(None, help="Ratio mínimo (por defecto OUTLIER_RATIO_MIN)"),
+    per_channel: Optional[int] = typer.Option(None, help="Máximo por canal (por defecto TOP_MAX_PER_CHANNEL; 0 = sin límite)"),
 ) -> None:
     """Outliers ordenados por score = ratio × log10(vistas)."""
     if sort not in ("score", "ratio"):
         raise typer.BadParameter("sort debe ser score o ratio")
     rows = research_mod.eligible_outliers(
-        db.get_conn(), limit=limit, niche=niche, min_views=min_views, min_ratio=min_ratio, sort=sort
+        db.get_conn(), limit=limit, niche=niche, min_views=min_views, min_ratio=min_ratio, sort=sort,
+        max_per_channel=_per_channel_limit(per_channel),
     )
     if not rows:
         console.print("Sin outliers que pasen el filtro. Corre `engine research \"<nicho>\"` o baja --min-views.")

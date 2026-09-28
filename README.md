@@ -86,7 +86,8 @@ uv run engine top --limit 20
 ```
 
 ### Consultas (`niches.txt`)
-Una consulta por línea con formato `consulta | idioma` (idioma opcional, se pasa como
+Las consultas en inglés están comentadas porque `RESULT_LANGUAGES=es` descartaría sus
+resultados. Una consulta por línea con formato `consulta | idioma` (idioma opcional, se pasa como
 `relevanceLanguage`); las líneas con `#` se ignoran. El texto de la consulta es la
 etiqueta del nicho en la base (`engine top --niche "stoicism"`). `--lang` en la línea de
 comandos pisa el idioma del archivo y `--file` permite usar otra lista.
@@ -113,11 +114,24 @@ Opciones de `top`:
 | `--sort` | `score` | `score` (ratio × log10 vistas) o `ratio` |
 | `--min-views` | `OUTLIER_MIN_VIEWS` (10 000) | vistas mínimas |
 | `--min-ratio` | `OUTLIER_RATIO_MIN` (5) | ratio mínimo |
+| `--per-channel` | `TOP_MAX_PER_CHANNEL` (2) | máximo de videos por canal (`0` = sin límite) |
 | `--niche` | — | texto exacto usado en `research` |
 
 `research` **guarda todos** los outliers con ratio ≥ umbral, tengan las vistas que tengan.
 Los filtros de vistas y ratio se aplican al leer (`engine top` y la entrada de la Fase 2,
-`research.eligible_outliers()`), así que se pueden cambiar sin volver a gastar cuota.
+`research.eligible_outliers()`), así que se pueden cambiar sin volver a gastar cuota. El límite por canal solo se aplica en
+`top`; la Fase 2 recibe todos los videos elegibles.
+
+### Filtros de contenido
+- **Idioma** (`RESULT_LANGUAGES=es`): se descartan los videos cuyo idioma declarado
+  (`defaultAudioLanguage`, o si falta `defaultLanguage`) no esté en la lista. Los que no
+  declaran idioma pasan. `relevanceLanguage` en la búsqueda solo es una preferencia de
+  YouTube, por eso hace falta este filtro.
+- **Noticias** (`EXCLUDE_CATEGORY_IDS=25`): se descarta la categoría *News & Politics*.
+  Ojo: incluye también comentario político.
+
+Ambos se aplican en `research` **antes** de consultar canales (no se gasta cuota en videos
+descartados) y otra vez al leer, para los outliers guardados antes de cambiar la configuración.
 
 ### Cómo funciona
 1. `search.list` con `videoDuration=short` (< 4 min) y `publishedAfter`.
@@ -139,8 +153,8 @@ Los filtros de vistas y ratio se aplican al leer (`engine top` y la entrada de l
 Cada consulta con `--pages 2` y ~60 canales nuevos cuesta ≈ 290 unidades (200 de búsqueda +
 ~1,5 por canal). Si la próxima llamada superaría `YT_DAILY_QUOTA`, se aborta antes de hacerla.
 Consultar el gasto del día: `engine doctor`.
-Recorrer las 21 consultas de `niches.txt` cuesta ≈ 6 000 unidades con `--pages 2` y
-≈ 3 000 con `--pages 1` (menos cuando los canales ya están en caché).
+Recorrer las 12 consultas activas de `niches.txt` cuesta ≈ 3 500 unidades con `--pages 2` y
+≈ 1 700 con `--pages 1` (menos cuando los canales ya están en caché).
 
 ## Tests
 ```bash
