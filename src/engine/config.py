@@ -36,8 +36,14 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-sonnet-5"
 
     db_path: Path = Path("data/outliers.db")
-    outlier_ratio_min: float = 5.0
     yt_daily_quota: int = 10_000
+
+    # Fase 1 — Research
+    outlier_ratio_min: float = 5.0
+    channel_cache_days: int = 7
+    channel_sample_size: int = 30  # últimos N uploads para la mediana
+    channel_min_videos: int = 5  # con menos, la mediana no es fiable y se descarta el canal
+    short_max_seconds: int = 180
 
     @field_validator("db_path")
     @classmethod

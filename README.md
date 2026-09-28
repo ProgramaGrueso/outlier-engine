@@ -9,7 +9,7 @@ diseño completo por fases.
 | Fase | Estado |
 |---|---|
 | 0 — Setup | ✅ |
-| 1 — Research | pendiente |
+| 1 — Research | ✅ |
 | 2 — Análisis | pendiente |
 | 3 — Ideación | pendiente |
 | 4 — Producción | pendiente |
@@ -72,7 +72,47 @@ ya aplicada). Tablas de la Fase 0:
 `engine.llm.unload_ollama()` descarga de la VRAM los modelos de Ollama cargados
 (`keep_alive: 0`). Se usará antes de mandar trabajo a ComfyUI en la Fase 4.
 
-### Tests
+
+## Fase 1 — Research
+
+Busca Shorts recientes de un nicho y guarda los que rinden muy por encima de su canal:
+`outlier_ratio = vistas_video / mediana(vistas de los últimos 30 uploads del canal)`.
+
+```bash
+uv run engine research "frutas con inteligencia artificial" --days 30 --lang es
+uv run engine top --limit 20
+```
+
+Opciones de `research`:
+
+| Opción | Por defecto | Qué hace |
+|---|---|---|
+| `--days` | 30 | solo Shorts publicados en los últimos N días |
+| `--pages` | 2 | páginas de `search.list` (50 resultados y **100 unidades** cada una) |
+| `--order` | `viewCount` | `viewCount`, `relevance` o `date` |
+| `--lang` / `--region` | — | `relevanceLanguage` (ej. `es`) / `regionCode` (ej. `MX`) |
+| `--min-ratio` | `OUTLIER_RATIO_MIN` (5) | umbral para guardar un outlier |
+
+`top` acepta `--limit` y `--niche` (filtra por el texto exacto usado en `research`).
+
+### Cómo funciona
+1. `search.list` con `videoDuration=short` (< 4 min) y `publishedAfter`.
+2. `videos.list` (lotes de 50) para vistas y duración; se quedan los de
+   ≤ `SHORT_MAX_SECONDS` (180 s) y se descartan directos.
+3. Por cada canal nuevo: `channels.list` → playlist de uploads → `playlistItems.list`
+   (últimos `CHANNEL_SAMPLE_SIZE`) → `videos.list` para la mediana. Canales con menos de
+   `CHANNEL_MIN_VIDEOS` videos quedan sin mediana y se ignoran.
+4. Los canales se cachean en la tabla `channels` y no se vuelven a consultar durante
+   `CHANNEL_CACHE_DAYS` (7) días.
+5. Outliers con ratio ≥ umbral → tabla `outliers` (si ya existe se actualizan vistas y ratio).
+   Cada corrida queda en `research_runs`.
+
+### Cuota
+Una corrida con `--pages 2` y ~60 canales nuevos cuesta ≈ 290 unidades (200 de búsqueda +
+~1,5 por canal). Si la próxima llamada superaría `YT_DAILY_QUOTA`, se aborta antes de hacerla.
+Consultar el gasto del día: `engine doctor`.
+
+## Tests
 ```bash
 uv run pytest
 ```

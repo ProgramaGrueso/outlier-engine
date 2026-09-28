@@ -36,6 +36,52 @@ MIGRATIONS: list[tuple[int, str]] = [
         CREATE INDEX idx_api_usage_api_ts ON api_usage (api, ts);
         """,
     ),
+    (
+        2,
+        """
+        CREATE TABLE channels (
+            channel_id        TEXT PRIMARY KEY,
+            title             TEXT,
+            subscribers       INTEGER,
+            uploads_playlist  TEXT,
+            median_views      REAL,              -- NULL si hay menos de CHANNEL_MIN_VIDEOS
+            sample_size       INTEGER NOT NULL,
+            fetched_at        TEXT    NOT NULL
+        );
+
+        CREATE TABLE outliers (
+            video_id        TEXT PRIMARY KEY,
+            channel_id      TEXT    NOT NULL REFERENCES channels (channel_id),
+            niche           TEXT    NOT NULL,
+            title           TEXT,
+            description     TEXT,
+            published_at    TEXT,
+            duration_s      INTEGER,
+            views           INTEGER NOT NULL,
+            likes           INTEGER,
+            comments        INTEGER,
+            channel_median  REAL    NOT NULL,
+            outlier_ratio   REAL    NOT NULL,
+            first_seen      TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        );
+        CREATE INDEX idx_outliers_ratio ON outliers (outlier_ratio DESC);
+
+        CREATE TABLE research_runs (
+            id                INTEGER PRIMARY KEY,
+            ts                TEXT    NOT NULL,
+            niche             TEXT    NOT NULL,
+            days              INTEGER NOT NULL,
+            pages             INTEGER NOT NULL,
+            videos_scanned    INTEGER NOT NULL,
+            shorts            INTEGER NOT NULL,
+            channels_fetched  INTEGER NOT NULL,
+            channels_cached   INTEGER NOT NULL,
+            outliers_saved    INTEGER NOT NULL,
+            units_used        INTEGER NOT NULL
+        );
+        """,
+    ),
 ]
 
 # La cuota de YouTube Data API se reinicia a medianoche hora del Pacífico.
