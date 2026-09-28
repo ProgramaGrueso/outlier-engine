@@ -1,5 +1,6 @@
 """SQLite con migraciones simples: lista ordenada de (versión, SQL)."""
 
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +83,15 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        3,
+        """
+        -- 'shorts' si la mediana sale de ≥ CHANNEL_MIN_VIDEOS Shorts, 'all' si de todos los uploads.
+        ALTER TABLE channels ADD COLUMN median_source TEXT;
+        -- Las medianas previas mezclaban videos largos: invalidar la caché para recalcularlas.
+        UPDATE channels SET fetched_at = '1970-01-01T00:00:00+00:00';
+        """,
+    ),
 ]
 
 # La cuota de YouTube Data API se reinicia a medianoche hora del Pacífico.
@@ -97,6 +107,8 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
+    # No todas las builds de SQLite traen funciones matemáticas; se registra la nuestra.
+    conn.create_function("log10", 1, math.log10, deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 

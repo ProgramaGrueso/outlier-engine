@@ -40,6 +40,7 @@ class Settings(BaseSettings):
 
     # Fase 1 — Research
     outlier_ratio_min: float = 5.0
+    outlier_min_views: int = 10_000  # filtro en `engine top` y entrada de la Fase 2, no al guardar
     channel_cache_days: int = 7
     channel_sample_size: int = 30  # últimos N uploads para la mediana
     channel_min_videos: int = 5  # con menos, la mediana no es fiable y se descarta el canal

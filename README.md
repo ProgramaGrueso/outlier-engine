@@ -76,7 +76,8 @@ ya aplicada). Tablas de la Fase 0:
 ## Fase 1 — Research
 
 Busca Shorts recientes de un nicho y guarda los que rinden muy por encima de su canal:
-`outlier_ratio = vistas_video / mediana(vistas de los últimos 30 uploads del canal)`.
+`outlier_ratio = vistas_video / mediana_canal`, y los ordena por
+`score = ratio × log10(vistas)` para premiar alcance real y no solo ratio.
 
 ```bash
 uv run engine research "frutas con inteligencia artificial" --days 30 --lang es
@@ -93,18 +94,34 @@ Opciones de `research`:
 | `--lang` / `--region` | — | `relevanceLanguage` (ej. `es`) / `regionCode` (ej. `MX`) |
 | `--min-ratio` | `OUTLIER_RATIO_MIN` (5) | umbral para guardar un outlier |
 
-`top` acepta `--limit` y `--niche` (filtra por el texto exacto usado en `research`).
+Opciones de `top`:
+
+| Opción | Por defecto | Qué hace |
+|---|---|---|
+| `--limit` | 20 | cuántos mostrar |
+| `--sort` | `score` | `score` (ratio × log10 vistas) o `ratio` |
+| `--min-views` | `OUTLIER_MIN_VIEWS` (10 000) | vistas mínimas |
+| `--min-ratio` | `OUTLIER_RATIO_MIN` (5) | ratio mínimo |
+| `--niche` | — | texto exacto usado en `research` |
+
+`research` **guarda todos** los outliers con ratio ≥ umbral, tengan las vistas que tengan.
+Los filtros de vistas y ratio se aplican al leer (`engine top` y la entrada de la Fase 2,
+`research.eligible_outliers()`), así que se pueden cambiar sin volver a gastar cuota.
 
 ### Cómo funciona
 1. `search.list` con `videoDuration=short` (< 4 min) y `publishedAfter`.
 2. `videos.list` (lotes de 50) para vistas y duración; se quedan los de
    ≤ `SHORT_MAX_SECONDS` (180 s) y se descartan directos.
 3. Por cada canal nuevo: `channels.list` → playlist de uploads → `playlistItems.list`
-   (últimos `CHANNEL_SAMPLE_SIZE`) → `videos.list` para la mediana. Canales con menos de
-   `CHANNEL_MIN_VIDEOS` videos quedan sin mediana y se ignoran.
+   (últimos `CHANNEL_SAMPLE_SIZE`) → `videos.list` para vistas y duración.
+   La mediana usa **solo los Shorts** del canal si hay al menos `CHANNEL_MIN_VIDEOS` (5);
+   si no, todos los uploads (columna `Base` en `top`). Con menos de 5 videos en total, el
+   canal queda sin mediana y se ignora.
 4. Los canales se cachean en la tabla `channels` y no se vuelven a consultar durante
    `CHANNEL_CACHE_DAYS` (7) días.
-5. Outliers con ratio ≥ umbral → tabla `outliers` (si ya existe se actualizan vistas y ratio).
+5. Outliers con ratio ≥ umbral → tabla `outliers`. Si un outlier ya guardado vuelve a
+   aparecer, se actualizan vistas y ratio aunque ya no pase el umbral; y al refrescar un
+   canal se recalcula el ratio de todos sus outliers con la mediana nueva.
    Cada corrida queda en `research_runs`.
 
 ### Cuota

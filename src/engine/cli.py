@@ -76,17 +76,26 @@ def research(
 def top(
     limit: int = typer.Option(20, help="Cuántos mostrar"),
     niche: Optional[str] = typer.Option(None, help="Filtrar por nicho"),
+    sort: str = typer.Option("score", help="score (ratio × log10 vistas) | ratio"),
+    min_views: Optional[int] = typer.Option(None, help="Vistas mínimas (por defecto OUTLIER_MIN_VIEWS)"),
+    min_ratio: Optional[float] = typer.Option(None, help="Ratio mínimo (por defecto OUTLIER_RATIO_MIN)"),
 ) -> None:
-    """Outliers ordenados por ratio (vistas / mediana del canal)."""
-    rows = research_mod.top(db.get_conn(), limit=limit, niche=niche)
+    """Outliers ordenados por score = ratio × log10(vistas)."""
+    if sort not in ("score", "ratio"):
+        raise typer.BadParameter("sort debe ser score o ratio")
+    rows = research_mod.eligible_outliers(
+        db.get_conn(), limit=limit, niche=niche, min_views=min_views, min_ratio=min_ratio, sort=sort
+    )
     if not rows:
-        console.print("Sin outliers todavía. Corre `engine research \"<nicho>\"` primero.")
+        console.print("Sin outliers que pasen el filtro. Corre `engine research \"<nicho>\"` o baja --min-views.")
         return
-    table = Table(title=f"Top {len(rows)} outliers")
+    table = Table(title=f"Top {len(rows)} outliers · orden: {sort}")
     table.add_column("#", justify="right")
-    table.add_column("Ratio", justify="right", style="bold green")
+    table.add_column("Score", justify="right", style="bold green" if sort == "score" else None)
+    table.add_column("Ratio", justify="right", style="bold green" if sort == "ratio" else None)
     table.add_column("Vistas", justify="right")
     table.add_column("Mediana", justify="right")
+    table.add_column("Base")
     table.add_column("Canal", max_width=20, no_wrap=True)
     table.add_column("Título", max_width=40, no_wrap=True)
     table.add_column("Link", no_wrap=True)
@@ -94,9 +103,11 @@ def top(
         url = research_mod.short_url(r["video_id"])
         table.add_row(
             str(i),
+            f"{r['score']:.1f}",
             f"{r['outlier_ratio']:.1f}×",
             _compact(r["views"]),
             _compact(r["channel_median"]),
+            {"shorts": "Shorts", "all": "todos"}.get(r["median_source"], "—"),
             r["channel_title"] or "",
             r["title"] or "",
             f"[link={url}]{url}[/link]",

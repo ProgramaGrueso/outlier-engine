@@ -207,42 +207,91 @@ def refresh_channels(yt: YouTube, conn: sqlite3.Connection, channel_ids: list[st
             continue
         samples[cid] = [it["contentDetails"]["videoId"] for it in resp.get("items", [])]
 
-    # Vistas de todas las muestras en lotes de 50, mezclando canales.
+    # Vistas y duración de todas las muestras en lotes de 50, mezclando canales.
     all_ids = [vid for ids in samples.values() for vid in ids]
-    views: dict[str, int] = {}
+    stats: dict[str, tuple[int, int]] = {}  # video_id → (vistas, duración en s)
     for chunk in _chunks(all_ids):
-        resp = yt.call("videos.list", part="statistics", id=",".join(chunk))
+        resp = yt.call("videos.list", part="statistics,contentDetails", id=",".join(chunk))
         for it in resp.get("items", []):
             if "viewCount" in it.get("statistics", {}):
-                views[it["id"]] = int(it["statistics"]["viewCount"])
+                duration = parse_duration(it.get("contentDetails", {}).get("duration", ""))
+                stats[it["id"]] = (int(it["statistics"]["viewCount"]), duration)
 
     medians: dict[str, float | None] = {}
     now = db.now_iso()
     with conn:
         for cid in channel_ids:
             ch = info.get(cid)
-            sample = [views[v] for v in samples.get(cid, []) if v in views]
-            median = statistics.median(sample) if len(sample) >= settings.channel_min_videos else None
+            sample = [stats[v] for v in samples.get(cid, []) if v in stats]
+            median, source, size = channel_median(sample)
             medians[cid] = median
             conn.execute(
                 """INSERT INTO channels
-                   (channel_id, title, subscribers, uploads_playlist, median_views, sample_size, fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   (channel_id, title, subscribers, uploads_playlist, median_views, median_source,
+                    sample_size, fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT (channel_id) DO UPDATE SET
                      title = excluded.title, subscribers = excluded.subscribers,
                      uploads_playlist = excluded.uploads_playlist, median_views = excluded.median_views,
-                     sample_size = excluded.sample_size, fetched_at = excluded.fetched_at""",
+                     median_source = excluded.median_source, sample_size = excluded.sample_size,
+                     fetched_at = excluded.fetched_at""",
                 (
                     cid,
                     ch["title"] if ch else None,
                     ch["subscribers"] if ch else None,
                     ch["uploads"] if ch else None,
                     median,
-                    len(sample),
+                    source,
+                    size,
                     now,
                 ),
             )
     return medians
+
+
+MedianSource = Literal["shorts", "all"]
+
+
+def channel_median(sample: list[tuple[int, int]]) -> tuple[float | None, MedianSource | None, int]:
+    """Mediana de vistas de un canal a partir de [(vistas, duración_s)].
+
+    Usa solo los Shorts si hay al menos CHANNEL_MIN_VIDEOS (compara Short contra Short);
+    si no, todos los uploads. Devuelve (mediana, fuente, tamaño de la muestra usada).
+    """
+    settings = get_settings()
+    shorts = [v for v, d in sample if 0 < d <= settings.short_max_seconds]
+    if len(shorts) >= settings.channel_min_videos:
+        return statistics.median(shorts), "shorts", len(shorts)
+    if len(sample) >= settings.channel_min_videos:
+        return statistics.median(v for v, _ in sample), "all", len(sample)
+    return None, None, len(sample)
+
+
+def _existing_outliers(conn: sqlite3.Connection, video_ids: list[str]) -> set[str]:
+    found: set[str] = set()
+    for chunk in _chunks(video_ids, 500):
+        marks = ",".join("?" * len(chunk))
+        found |= {r[0] for r in conn.execute(f"SELECT video_id FROM outliers WHERE video_id IN ({marks})", chunk)}
+    return found
+
+
+def _recompute_ratios(conn: sqlite3.Connection, channel_ids: list[str]) -> None:
+    """Tras refrescar canales, alinea el ratio de sus outliers guardados con la mediana nueva."""
+    now = db.now_iso()
+    with conn:
+        for chunk in _chunks(channel_ids, 500):
+            marks = ",".join("?" * len(chunk))
+            conn.execute(
+                f"""UPDATE outliers SET
+                      channel_median = c.median_views,
+                      outlier_ratio = outliers.views / c.median_views,
+                      updated_at = ?
+                    FROM channels c
+                    WHERE c.channel_id = outliers.channel_id
+                      AND c.median_views IS NOT NULL
+                      AND outliers.channel_id IN ({marks})""",
+                (now, *chunk),
+            )
 
 
 def save_outlier(conn: sqlite3.Connection, v: Video, niche: str, median: float, ratio: float) -> None:
@@ -291,7 +340,9 @@ def research(
     to_fetch = [c for c in channel_ids if c not in medians]
     if to_fetch:
         medians.update(refresh_channels(yt, conn, to_fetch))
+        _recompute_ratios(conn, to_fetch)
 
+    known = _existing_outliers(conn, [v.video_id for v in shorts])
     saved = 0
     for v in shorts:
         median = medians.get(v.channel_id)
@@ -301,6 +352,8 @@ def research(
         if ratio >= min_ratio:
             save_outlier(conn, v, niche, median, ratio)
             saved += 1
+        elif v.video_id in known:
+            save_outlier(conn, v, niche, median, ratio)  # refrescar aunque ya no pase el umbral
 
     summary = ResearchSummary(
         niche=niche,
@@ -326,15 +379,42 @@ def research(
     return summary
 
 
-def top(conn: sqlite3.Connection, limit: int = 20, niche: str | None = None) -> list[sqlite3.Row]:
-    sql = """SELECT o.*, c.title AS channel_title FROM outliers o
-             LEFT JOIN channels c USING (channel_id)"""
-    params: tuple = ()
+SortKey = Literal["score", "ratio"]
+
+# score = ratio × log10(vistas): premia outliers con alcance real, no solo ratio alto.
+SCORE_SQL = "o.outlier_ratio * log10(MAX(o.views, 1))"
+
+
+def eligible_outliers(
+    conn: sqlite3.Connection,
+    *,
+    limit: int | None = None,
+    niche: str | None = None,
+    min_views: int | None = None,
+    min_ratio: float | None = None,
+    sort: SortKey = "score",
+) -> list[sqlite3.Row]:
+    """Outliers que pasan OUTLIER_MIN_VIEWS y OUTLIER_RATIO_MIN. Entrada de `engine top` y de la Fase 2.
+
+    En la tabla se guardan todos los outliers; los umbrales se aplican aquí para poder
+    cambiarlos sin volver a consultar la API. El ratio se vuelve a filtrar porque un
+    outlier guardado puede dejar de serlo cuando se recalcula la mediana de su canal.
+    """
+    settings = get_settings()
+    min_views = settings.outlier_min_views if min_views is None else min_views
+    min_ratio = settings.outlier_ratio_min if min_ratio is None else min_ratio
+    sql = f"""SELECT o.*, c.title AS channel_title, c.median_source, {SCORE_SQL} AS score
+              FROM outliers o JOIN channels c USING (channel_id)
+              WHERE o.views >= ? AND o.outlier_ratio >= ? AND c.median_views IS NOT NULL"""
+    params: list[Any] = [min_views, min_ratio]
     if niche:
-        sql += " WHERE o.niche = ?"
-        params = (niche,)
-    sql += " ORDER BY o.outlier_ratio DESC LIMIT ?"
-    return conn.execute(sql, (*params, limit)).fetchall()
+        sql += " AND o.niche = ?"
+        params.append(niche)
+    sql += " ORDER BY score DESC" if sort == "score" else " ORDER BY o.outlier_ratio DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return conn.execute(sql, params).fetchall()
 
 
 def short_url(video_id: str) -> str:
